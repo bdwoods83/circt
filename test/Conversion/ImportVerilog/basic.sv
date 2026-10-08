@@ -5503,3 +5503,96 @@ endmodule
 (* flag_attr, str_attr = "hello \"world\"", int_attr = 42 *)
 module ModuleWithAttrs();
 endmodule
+
+// IEEE 1800-2017 § 11.8.1 and § 11.8.2: if any operand of an expression is
+// unsigned, the expression is unsigned and every operand is converted to
+// unsigned before it is extended. A signed operand of a mixed expression is
+// therefore zero-extended, and `>>>` on an unsigned result type is a logical
+// shift. Operands of an all-signed expression, an assignment to a wider
+// variable and an explicit size cast of a signed value are sign-extended.
+// CHECK-LABEL: moore.module @SignedOperandExtension
+module SignedOperandExtension(
+    input logic signed [3:0] ws, input logic signed [7:0] s,
+    input logic signed [3:0] ws2, input logic [7:0] a, input logic c,
+    output logic [11:0] sum_u, output logic signed [11:0] sum_s,
+    output logic [11:0] cnd_u, output logic [11:0] mul_u,
+    output logic [11:0] sh_u, output logic signed [11:0] sh_s,
+    output logic [11:0] cast_s, output logic [11:0] cast_u,
+    output logic [11:0] asg_s, output logic [2:0] cmp);
+  // Mixed signed/unsigned sum: both operands zero-extended.
+  // CHECK: [[WS:%.+]] = moore.read %ws_0
+  // CHECK: [[WS_EXT:%.+]] = moore.zext [[WS]] : l4 -> l12
+  // CHECK: [[A:%.+]] = moore.read %a_3
+  // CHECK: [[A_EXT:%.+]] = moore.zext [[A]] : l8 -> l12
+  // CHECK: [[SUM:%.+]] = moore.add [[WS_EXT]], [[A_EXT]] : l12
+  // CHECK: moore.assign %sum_u, [[SUM]]
+  assign sum_u = ws + a;
+
+  // All operands signed: sign-extended.
+  // CHECK: [[WS:%.+]] = moore.read %ws_0
+  // CHECK: [[WS_EXT:%.+]] = moore.sext [[WS]] : l4 -> l12
+  // CHECK: [[WS2:%.+]] = moore.read %ws2_2
+  // CHECK: [[WS2_EXT:%.+]] = moore.sext [[WS2]] : l4 -> l12
+  // CHECK: [[SUM:%.+]] = moore.add [[WS_EXT]], [[WS2_EXT]] : l12
+  // CHECK: moore.assign %sum_s, [[SUM]]
+  assign sum_s = ws + ws2;
+
+  // Both branches of a mixed conditional are zero-extended.
+  // CHECK: moore.conditional
+  // CHECK: [[S:%.+]] = moore.read %s_1
+  // CHECK: [[S_EXT:%.+]] = moore.zext [[S]] : l8 -> l12
+  // CHECK: moore.yield [[S_EXT]]
+  // CHECK: [[A:%.+]] = moore.read %a_3
+  // CHECK: [[A_EXT:%.+]] = moore.zext [[A]] : l8 -> l12
+  // CHECK: moore.yield [[A_EXT]]
+  assign cnd_u = c ? s : a;
+
+  // CHECK: [[A:%.+]] = moore.read %a_3
+  // CHECK: [[A_EXT:%.+]] = moore.zext [[A]] : l8 -> l12
+  // CHECK: [[WS:%.+]] = moore.read %ws_0
+  // CHECK: [[WS_EXT:%.+]] = moore.zext [[WS]] : l4 -> l12
+  // CHECK: moore.mul [[A_EXT]], [[WS_EXT]] : l12
+  assign mul_u = a * ws;
+
+  // The shifted operand is zero-extended and `>>>` is a logical shift because
+  // the propagated type is unsigned.
+  // CHECK: [[S:%.+]] = moore.read %s_1
+  // CHECK: [[S_EXT:%.+]] = moore.zext [[S]] : l8 -> l12
+  // CHECK: moore.shr [[S_EXT]], {{.*}} : l12, i32
+  // CHECK: [[A:%.+]] = moore.read %a_3
+  // CHECK: [[A_EXT:%.+]] = moore.zext [[A]] : l8 -> l12
+  // CHECK: moore.shr [[A_EXT]], {{.*}} : l12, i32
+  // CHECK: moore.assign %sh_u
+  assign sh_u = (s >>> 2) + (a >>> 2);
+
+  // Signed context: sign-extended and arithmetic.
+  // CHECK: [[S:%.+]] = moore.read %s_1
+  // CHECK: [[S_EXT:%.+]] = moore.sext [[S]] : l8 -> l12
+  // CHECK: moore.ashr [[S_EXT]], {{.*}} : l12, i32
+  // CHECK: moore.assign %sh_s
+  assign sh_s = s >>> 2;
+
+  // An explicit size cast extends by the operand's own signedness.
+  // CHECK: [[WS:%.+]] = moore.read %ws_0
+  // CHECK: [[WS_EXT:%.+]] = moore.sext [[WS]] : l4 -> l12
+  // CHECK: moore.assign %cast_s, [[WS_EXT]]
+  assign cast_s = 12'(ws);
+  // CHECK: [[WS:%.+]] = moore.read %ws_0
+  // CHECK: [[WS_EXT:%.+]] = moore.zext [[WS]] : l4 -> l12
+  // CHECK: moore.assign %cast_u, [[WS_EXT]]
+  assign cast_u = 12'($unsigned(ws));
+
+  // A plain assignment extends by the right-hand side's own signedness.
+  // CHECK: [[WS:%.+]] = moore.read %ws_0
+  // CHECK: [[WS_EXT:%.+]] = moore.sext [[WS]] : l4 -> l12
+  // CHECK: moore.assign %asg_s, [[WS_EXT]]
+  assign asg_s = ws;
+
+  // Comparisons of mixed operands are unsigned and extend with zeros.
+  // CHECK: [[WS:%.+]] = moore.read %ws_0
+  // CHECK: [[WS_EXT:%.+]] = moore.zext [[WS]] : l4 -> l8
+  // CHECK: moore.ult [[WS_EXT]], {{.*}} : l8 -> l1
+  // CHECK: moore.uge {{.*}}, {{.*}} : l8 -> l1
+  // CHECK: moore.eq {{.*}}, {{.*}} : l8 -> l1
+  assign cmp = {ws < a, a >= ws, ws == a};
+endmodule

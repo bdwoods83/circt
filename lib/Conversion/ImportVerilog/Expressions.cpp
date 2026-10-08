@@ -1132,7 +1132,20 @@ struct RvalueExprVisitor : public ExprVisitor {
     auto type = context.convertType(*expr.type);
     if (!type)
       return {};
-    return context.convertRvalueExpression(expr.operand(), type);
+    auto value = context.convertRvalueExpression(expr.operand());
+    if (!value)
+      return {};
+
+    // A conversion inserted by type propagation (IEEE 1800-2017 § 11.8.2)
+    // extends the operand according to the signedness of the propagated type,
+    // not the operand's own: in a mixed signed/unsigned expression the signed
+    // operand is zero-extended. All other conversions, including explicit size
+    // casts, extend according to the operand's own signedness.
+    bool isSigned =
+        expr.conversionKind == slang::ast::ConversionKind::Propagated
+            ? expr.type->isSigned()
+            : expr.operand().type->isSigned();
+    return context.materializeConversion(type, value, isSigned, loc);
   }
 
   // Handle blocking and non-blocking assignments.
